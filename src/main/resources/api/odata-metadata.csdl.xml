@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="odata4.namespace">
+      <EntityType Name="Employees">
+        <Key>
+          <PropertyRef Name="EmployeeName" />
+        </Key>
+        <Property Name="CompanyName" Type="Edm.String" MaxLength="40" Unicode="false" />
+        <Property Name="EmployeeName" Type="Edm.String" MaxLength="30" Unicode="false" />
+        <Property Name="Designation" Type="Edm.String" MaxLength="30" Unicode="false" />
+        <Property Name="EmployeeID" Type="Edm.String"  MaxLength="5" Unicode="false" />
+        <NavigationProperty Name="Company" Type="Collection(odata4.namespace.Company)"/>
+      </EntityType>
+      <EntityType Name="Company">
+        <Key>
+          <PropertyRef Name="CompanyName" />
+         </Key>
+        <Property Name="CompanyName" Type="Edm.String" MaxLength="35" Unicode="false" />
+        <Property Name="CompanyAddress" Type="Edm.String" MaxLength="30" Unicode="false" />
+        <Property Name="CompanyType" Type="Edm.String" MaxLength="30" Unicode="false" />
+        <Property Name="CustomerID" Type="Edm.String" MaxLength="30" Unicode="false" />
+        <NavigationProperty Name="Employees" Type="odata4.namespace.Employees">
+			<ReferentialConstraint Property="EmployeeName" ReferencedProperty="EmployeeName" />
+		</NavigationProperty>
+      </EntityType>
+      <EntityContainer Name="OData4EntityContainer">
+        <EntitySet Name="Employees" EntityType="odata4.namespace.Employees">
+        	<NavigationPropertyBinding Path="Company" Target="Company"/>
+		</EntitySet>
+        <EntitySet Name="Company" EntityType="odata4.namespace.Company"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

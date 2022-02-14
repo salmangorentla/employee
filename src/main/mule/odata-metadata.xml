@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit-odata="http://www.mulesoft.org/schema/mule/apikit-odata" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/apikit-odata http://www.mulesoft.org/schema/mule/apikit-odata/current/mule-apikit-odata.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd 
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+  <apikit-odata:config name="odata-metadata-config" apiDefinition="api/odata-metadata.csdl.xml" />
+  <http:listener-config name="HTTP_Listener_Config">
+    <http:listener-connection host="0.0.0.0" port="8092" />
+  </http:listener-config>
+  <db:config name="Database_Config" doc:name="Database Config" doc:id="cb74e271-a3ce-40b6-9ede-7bd97329016b" >
+		<db:my-sql-connection host="localhost" port="3306" user="root" password="kushi@353" database="training" />
+	</db:config>
+	<configuration-properties doc:name="Configuration properties" doc:id="69d32699-a1d9-4941-b218-138d00564365" file="config.yam" />
+	<flow name="main-odata-flow">
+    <http:listener config-ref="HTTP_Listener_Config" path="/api/*">
+      <http:response statusCode="#[attributes.statusCode default 200]">
+        <http:headers>#[attributes.headers default {}]</http:headers>
+      </http:response>
+      <http:error-response statusCode="#[vars.statusCode default 500]">
+        <http:body>#[payload]</http:body>
+        <http:headers>#[vars.headers default {}]</http:headers>
+      </http:error-response>
+    </http:listener>
+    <apikit-odata:route config-ref="odata-metadata-config">
+      <apikit-odata:http-request-parameters listenerPath="#[attributes.listenerPath]" method="#[attributes.method]" scheme="#[upper(attributes.scheme)]" host="#[attributes.headers.'host']" httpHeaders="#[attributes.headers]" queryString="#[attributes.queryString]" maskedRequestPath="#[attributes.maskedRequestPath]" />
+    </apikit-odata:route>
+    <error-handler name="Error_Handler">
+      <on-error-propagate name="On_Error_Propagate" enableNotifications="true" logException="true" type="MULE:ANY">
+        <ee:transform>
+          <ee:message>
+            <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	error: {
+		code: error.errorMessage.payload.code default "UNKNOWN",
+		message: error.errorMessage.payload.message default error.description,
+		target: error.errorMessage.payload.target,
+		details: error.errorMessage.payload.details default [{code: "UNKNOWN", message: error.detailedDescription, target: null}],
+		innererror: error.errorMessage.payload.innerError default error.childErrors
+	}
+}]]></ee:set-payload>
+          </ee:message>
+          <ee:variables>
+            <ee:set-variable variableName="statusCode"><![CDATA[error.errorMessage.payload.statusCode default 500]]></ee:set-variable>
+          </ee:variables>
+        </ee:transform>
+      </on-error-propagate>
+    </error-handler>
+  </flow>
+  <flow name="GET\Employees\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Employees" method="GET" />
+    <logger level="INFO" message="In GET\Employees\ENTITY flow" />
+    <apikit-odata:transform-to-sql-select doc:name="Transform to sql select" doc:id="8ccc32ae-a4ec-41ea-a2c9-03e2caf9e3fb" config-ref="odata-metadata-config" entitySetName="#[attributes.entitySetName]">
+			<apikit-odata:request-parameters entityTypeName="#[attributes.odataRequestAttributes.entityTypeName]" entityTypeFields="#[attributes.odataRequestAttributes.entityTypeFields]" entityTypeKeys="#[attributes.odataRequestAttributes.entityTypeKeys]" systemQueryOptions="#[attributes.odataRequestAttributes.systemQueryOptions]" />
+		</apikit-odata:transform-to-sql-select>
+		<db:select doc:name="Select" doc:id="b23724a7-2ec0-4733-84f7-f1d1b0e22051" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+			<db:input-parameters ><![CDATA[#[attributes.queryParameters]]]></db:input-parameters>
+		</db:select>
+		<apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Employees" method="GET">
+      <apikit-odata:inbound-content><![CDATA[#[%dw 2.0 output application/json --- payload[0]]]]></apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="POST\Employees\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Employees" method="POST" />
+    <ee:transform doc:name="Transform Message" doc:id="291e9b20-1a49-4606-9b2b-d36403feced6" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+ 
+var remoteEntityName = attributes.entitySetName match {
+	case remoteEntityName is String -> remoteEntityName
+	else -> ""	
+}
+
+var valuesFromPayload = {
+	keys: payload pluck $$,
+	values: payload pluck "'$'"
+}
+
+var columns = ( (valuesFromPayload.keys map "`$`" ) joinBy ", ") // myKey1, myKey2
+var values = (valuesFromPayload.values joinBy ", ") // 'myValue1', 'myValue2'
+---
+"INSERT INTO $remoteEntityName ($columns) VALUES ($values)"]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="EmpployeeName" ><![CDATA[%dw 2.0
+output application/java
+---
+payload.EmployeeName]]></ee:set-variable>
+				<ee:set-variable variableName="entiitySetName" ><![CDATA[%dw 2.0
+output application/java
+---
+attributes.entitySetName]]></ee:set-variable>
+				<ee:set-variable variableName="odataRequest" ><![CDATA[%dw 2.0
+output application/java
+---
+attributes.odataRequestAttributes]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<db:insert doc:name="Insert" doc:id="2cbbd9dd-1e1e-463b-99c9-b246f95520cf" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+		</db:insert>
+		<apikit-odata:transform-to-sql-select doc:name="Transform to sql select" doc:id="6afc772e-c416-4bae-a333-4af41097edf8" config-ref="odata-metadata-config" entitySetName="#[vars.entiitySetName]">
+			<apikit-odata:request-parameters entityTypeName="#[vars.odataRequest.entityTypeName]" entityTypeFields="#[vars.odataRequest.entityTypeFields]" systemQueryOptions="#[vars.odataRequest.systemQueryOptions]" >
+				<apikit-odata:entity-type-keys >
+					<apikit-odata:entity-type-key key="EmployeeName" value="#[&quot;'&quot; ++ vars.EmpployeeName as String ++ &quot;'&quot;]" />
+				</apikit-odata:entity-type-keys>
+			</apikit-odata:request-parameters>
+		</apikit-odata:transform-to-sql-select>
+		<db:select doc:name="Select" doc:id="2d8278f8-f693-41d6-87a0-a67001bf6ee4" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+			<db:input-parameters ><![CDATA[#[attributes.queryParameters]]]></db:input-parameters>
+		</db:select>
+		<apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Employees" method="POST">
+      <apikit-odata:inbound-content><![CDATA[#[%dw 2.0 output application/json --- payload[0]]]]></apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="PATCH\Employees\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Employees" method="PATCH" />
+    <ee:transform doc:name="Transform Message" doc:id="4705e191-c37f-4a57-8a10-d6535a921c26" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+
+var remoteEntityName = attributes.entitySetName match {
+	case remoteEntityName is String -> remoteEntityName
+	else -> ""	
+}
+
+var generateWhereClause = (attributes.odataRequestAttributes.entityTypeKeys mapObject ((value, key) -> '$key': "$key = $value")) pluck ((value, key, index) -> value ) joinBy  " AND "
+
+var sqlValues = (payload mapObject ((value, key) -> '$key': "$key = '$value'")) pluck ((value, key, index) -> value ) joinBy  ","
+---
+"UPDATE $remoteEntityName SET $sqlValues WHERE $generateWhereClause"]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="entitySetName" ><![CDATA[%dw 2.0
+output application/java
+---
+attributes.entitySetName]]></ee:set-variable>
+				<ee:set-variable variableName="odataRequest" ><![CDATA[%dw 2.0
+output application/java
+---
+attributes.odataRequestAttributes]]></ee:set-variable>
+				<ee:set-variable variableName="employeeName" ><![CDATA[%dw 2.0
+output application/java
+---
+payload.EmployeeName]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<db:update doc:name="Update" doc:id="20a6f48d-0b3a-4c22-b776-4c6537a265ad" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+		</db:update>
+		<apikit-odata:transform-to-sql-select doc:name="Transform to sql select" doc:id="ec2c538f-849f-4da3-a02e-b04892977d51" config-ref="odata-metadata-config" entitySetName="#[vars.entitySetName]">
+			<apikit-odata:request-parameters entityTypeFields="#[vars.odataRequest.entityTypeFields]" systemQueryOptions="#[vars.odataRequest.systemQueryOptions]" entityTypeName="#[vars.odataRequest.entityTypeName]">
+				<apikit-odata:entity-type-keys >
+					<apikit-odata:entity-type-key key="EmployeeName" value="#[vars.odataRequest.entityTypeKeys.EmployeeName]" />
+				</apikit-odata:entity-type-keys>
+			</apikit-odata:request-parameters>
+		</apikit-odata:transform-to-sql-select>
+		<db:select doc:name="Select" doc:id="f5c6b883-60ed-4515-a8ff-014af9a89397" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+			<db:input-parameters ><![CDATA[#[attributes.queryParameters]]]></db:input-parameters>
+		</db:select>
+		<apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Employees" method="PATCH">
+      <apikit-odata:inbound-content><![CDATA[#[%dw 2.0 output application/json --- payload[0]]]]></apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="PUT\Employees\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Employees" method="PUT" />
+    <ee:transform doc:name="Transform Message" doc:id="5abc6aa4-b294-4897-898b-4740a41a3025" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+
+var remoteEntityName = attributes.entitySetName match {
+	case remoteEntityName is String -> remoteEntityName
+	else -> ""	
+}
+
+var generateWhereClause = (attributes.odataRequestAttributes.entityTypeKeys mapObject ((value, key) -> '$key': "$key = $value")) pluck ((value, key, index) -> value ) joinBy  " AND "
+
+var sqlValues = (payload mapObject ((value, key) -> '$key': "$key = '$value'")) pluck ((value, key, index) -> value ) joinBy  ","
+---
+"UPDATE $remoteEntityName SET $sqlValues WHERE $generateWhereClause"]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="entitySetName" ><![CDATA[%dw 2.0
+output application/java
+---
+attributes.entitySetName]]></ee:set-variable>
+				<ee:set-variable variableName="odataRequest" ><![CDATA[%dw 2.0
+output application/java
+---
+attributes.odataRequestAttributes]]></ee:set-variable>
+				<ee:set-variable variableName="EmployeeName" ><![CDATA[%dw 2.0
+output application/java
+---
+payload.EmployeeName]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<db:update doc:name="Update" doc:id="6e3b546d-7c98-48fd-bf2a-a524d2de9cc8" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+		</db:update>
+		<apikit-odata:transform-to-sql-select doc:name="Transform to sql select" doc:id="49e7d67f-3e32-43b2-a6a2-2e45dadf4ef0" config-ref="odata-metadata-config" entitySetName="#[vars.entitySetName]">
+			<apikit-odata:request-parameters entityTypeName="#[vars.odataRequest.entityTypeName]" entityTypeFields="#[vars.odataRequest.entityTypeFields]" systemQueryOptions="#[vars.odataRequest.systemQueryOptions]" >
+				<apikit-odata:entity-type-keys >
+					<apikit-odata:entity-type-key key="EmployeeName" value="#[vars.odataRequest.EmployeeName]&#10;" />
+				</apikit-odata:entity-type-keys>
+			</apikit-odata:request-parameters>
+		</apikit-odata:transform-to-sql-select>
+		<db:select doc:name="Select" doc:id="9d556ff3-a41d-4b41-842d-b3d1055487b9" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+			<db:input-parameters ><![CDATA[#[attributes.queryParameters]]]></db:input-parameters>
+		</db:select>
+		<apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Employees" method="PUT">
+      <apikit-odata:inbound-content><![CDATA[#[%dw 2.0 output application/json --- if (isEmpty(payload)){} else payload[0]]]]></apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="DELETE\Employees\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Employees" method="DELETE" />
+		<ee:transform doc:name="Transform Message" doc:id="9db73aa2-3810-4703-95de-584de7ad7adc" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+
+var remoteEntityName = attributes.entitySetName match {
+	case remoteEntityName is String -> remoteEntityName
+	else -> ""	
+}
+
+// Transform key-values pairs into something like myKey1 = 'myValue1' and myKey2 = 'myValue2'
+var generateWhereClause = (attributes.odataRequestAttributes.entityTypeKeys mapObject ((value, key) -> '$key': "$key = $value")) pluck ((value, key, index) -> value ) joinBy  " AND "
+---
+"DELETE FROM $remoteEntityName WHERE $generateWhereClause"]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<db:delete doc:name="Delete" doc:id="aec7a777-533d-4993-91f8-0d86e4f0ea2d" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+		</db:delete>
+		<ee:transform doc:name="Transform Message" doc:id="ccbf5bf7-fdb4-452d-b2e2-a440a7507935" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"Message": "Successfully Deleted"
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+  </flow>
+  <flow name="GET\Employees\ENTITY_COLLECTION">
+    <apikit-odata:request-entity-collection-listener config-ref="odata-metadata-config" path="/Employees" method="GET" />
+    <logger level="INFO" message="In GET\Employees\ENTITY_COLLECTION flow" />
+    <apikit-odata:transform-to-sql-select doc:name="Transform to sql select" doc:id="0ea2d431-c853-4b38-8432-69ddaf013ed4" config-ref="odata-metadata-config" entitySetName="#[attributes.entitySetName]">
+			<apikit-odata:request-parameters entityTypeName="#[attributes.odataRequestAttributes.entityTypeName]" entityTypeFields="#[attributes.odataRequestAttributes.entityTypeFields]" entityTypeKeys="#[attributes.odataRequestAttributes.entityTypeKeys]" systemQueryOptions="#[attributes.odataRequestAttributes.systemQueryOptions]" />
+		</apikit-odata:transform-to-sql-select>
+		<db:select doc:name="Select" doc:id="d9f81144-4b14-4553-b387-90e7bce468f6" config-ref="Database_Config">
+			<db:sql ><![CDATA[#[payload]]]></db:sql>
+			<db:input-parameters ><![CDATA[#[attributes.queryParameters]]]></db:input-parameters>
+		</db:select>
+		<apikit-odata:serialize-entity-collection config-ref="odata-metadata-config" path="/Employees" method="GET">
+      <apikit-odata:inbound-content>#[%dw 2.0 output application/json --- { "value": payload }]</apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity-collection>
+  </flow>
+  <flow name="GET\Company\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Company" method="GET" />
+    <logger level="INFO" message="In GET\Company\ENTITY flow" />
+    <apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Company" method="GET">
+      <apikit-odata:inbound-content>#[%dw 2.0 output application/json --- payload]</apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="POST\Company\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Company" method="POST" />
+    <logger level="INFO" message="In POST\Company\ENTITY flow" />
+    <apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Company" method="POST">
+      <apikit-odata:inbound-content>#[%dw 2.0 output application/json --- payload]</apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="PATCH\Company\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Company" method="PATCH" />
+    <logger level="INFO" message="In PATCH\Company\ENTITY flow" />
+    <apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Company" method="PATCH">
+      <apikit-odata:inbound-content>#[%dw 2.0 output application/json --- payload]</apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="PUT\Company\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Company" method="PUT" />
+    <logger level="INFO" message="In PUT\Company\ENTITY flow" />
+    <apikit-odata:serialize-entity config-ref="odata-metadata-config" path="/Company" method="PUT">
+      <apikit-odata:inbound-content>#[%dw 2.0 output application/json --- payload]</apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity>
+  </flow>
+  <flow name="DELETE\Company\ENTITY">
+    <apikit-odata:request-entity-listener config-ref="odata-metadata-config" path="/Company" method="DELETE" />
+    <logger level="INFO" message="In DELETE\Company\ENTITY flow" />
+  </flow>
+  <flow name="GET\Company\ENTITY_COLLECTION">
+    <apikit-odata:request-entity-collection-listener config-ref="odata-metadata-config" path="/Company" method="GET" />
+    <logger level="INFO" message="In GET\Company\ENTITY_COLLECTION flow" />
+    <apikit-odata:serialize-entity-collection config-ref="odata-metadata-config" path="/Company" method="GET">
+      <apikit-odata:inbound-content>#[%dw 2.0 output application/json --- { "value": payload }]</apikit-odata:inbound-content>
+    </apikit-odata:serialize-entity-collection>
+  </flow>
+</mule>
